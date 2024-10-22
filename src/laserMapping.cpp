@@ -53,12 +53,20 @@
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
+
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_srvs/srv/trigger.hpp>
+
+#include <tf2_ros/transform_listener.h>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_broadcaster.h>
+
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
+
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
@@ -142,6 +150,11 @@ geometry_msgs::msg::PoseStamped msg_body_pose;
 
 shared_ptr<Preprocess> p_pre(new Preprocess());
 shared_ptr<ImuProcess> p_imu(new ImuProcess());
+
+/*** Modified for Fines Robot ***/
+// ADD LINES BELOW
+geometry_msgs::msg::TransformStamped transform_lidar2base;
+// ADD LINES ABOVE
 
 void SigHandle(int sig)
 {
@@ -505,7 +518,7 @@ void publish_frame_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Share
         pcl::toROSMsg(*laserCloudWorld, laserCloudmsg);
         // laserCloudmsg.header.stamp = ros::Time().fromSec(lidar_end_time);
         laserCloudmsg.header.stamp = get_ros_time(lidar_end_time);
-        laserCloudmsg.header.frame_id = "camera_init";
+        laserCloudmsg.header.frame_id = "lidar_odom";
         pubLaserCloudFull->publish(laserCloudmsg);
         publish_count -= PUBFRAME_PERIOD;
     }
@@ -557,7 +570,7 @@ void publish_frame_body(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Shared
     sensor_msgs::msg::PointCloud2 laserCloudmsg;
     pcl::toROSMsg(*laserCloudIMUBody, laserCloudmsg);
     laserCloudmsg.header.stamp = get_ros_time(lidar_end_time);
-    laserCloudmsg.header.frame_id = "body";
+    laserCloudmsg.header.frame_id = "base_lidar";
     pubLaserCloudFull_body->publish(laserCloudmsg);
     publish_count -= PUBFRAME_PERIOD;
 }
@@ -574,7 +587,7 @@ void publish_effect_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Shar
     sensor_msgs::msg::PointCloud2 laserCloudFullRes3;
     pcl::toROSMsg(*laserCloudWorld, laserCloudFullRes3);
     laserCloudFullRes3.header.stamp = get_ros_time(lidar_end_time);
-    laserCloudFullRes3.header.frame_id = "camera_init";
+    laserCloudFullRes3.header.frame_id = "lidar_odom";
     pubLaserCloudEffect->publish(laserCloudFullRes3);
 }
 
@@ -596,13 +609,13 @@ void publish_map(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub
     pcl::toROSMsg(*pcl_wait_pub, laserCloudmsg);
     // laserCloudmsg.header.stamp = ros::Time().fromSec(lidar_end_time);
     laserCloudmsg.header.stamp = get_ros_time(lidar_end_time);
-    laserCloudmsg.header.frame_id = "camera_init";
+    laserCloudmsg.header.frame_id = "lidar_odom";
     pubLaserCloudMap->publish(laserCloudmsg);
 
     // sensor_msgs::msg::PointCloud2 laserCloudMap;
     // pcl::toROSMsg(*featsFromMap, laserCloudMap);
     // laserCloudMap.header.stamp = get_ros_time(lidar_end_time);
-    // laserCloudMap.header.frame_id = "camera_init";
+    // laserCloudMap.header.frame_id = "lidar_odom";
     // pubLaserCloudMap->publish(laserCloudMap);
 }
 
@@ -627,8 +640,8 @@ void set_posestamp(T & out)
 
 void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubOdomAftMapped, std::unique_ptr<tf2_ros::TransformBroadcaster> & tf_br)
 {
-    odomAftMapped.header.frame_id = "camera_init";
-    odomAftMapped.child_frame_id = "body";
+    odomAftMapped.header.frame_id = "lidar_odom";
+    odomAftMapped.child_frame_id = "base_lidar";
     odomAftMapped.header.stamp = get_ros_time(lidar_end_time);
     set_posestamp(odomAftMapped.pose);
     pubOdomAftMapped->publish(odomAftMapped);
@@ -644,17 +657,33 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
         odomAftMapped.pose.covariance[i*6 + 5] = P(k, 2);
     }
 
+//    // 原始代码，发布的是lidar_odom到base_lidar的tf
+//    geometry_msgs::msg::TransformStamped trans;
+//    trans.header.frame_id = "lidar_odom";
+//    trans.child_frame_id = "base_lidar";
+//    trans.header.stamp = get_ros_time(lidar_end_time);
+//    trans.transform.translation.x = odomAftMapped.pose.pose.position.x;
+//    trans.transform.translation.y = odomAftMapped.pose.pose.position.y;
+//    trans.transform.translation.z = odomAftMapped.pose.pose.position.z;
+//    trans.transform.rotation.w = odomAftMapped.pose.pose.orientation.w;
+//    trans.transform.rotation.x = odomAftMapped.pose.pose.orientation.x;
+//    trans.transform.rotation.y = odomAftMapped.pose.pose.orientation.y;
+//    trans.transform.rotation.z = odomAftMapped.pose.pose.orientation.z;
+//    tf_br->sendTransform(trans);
+
+    // 修改代码，发布的是lidar_odom到base_link的tf
     geometry_msgs::msg::TransformStamped trans;
-    trans.header.frame_id = "camera_init";
-    trans.child_frame_id = "body";
-    trans.header.stamp = get_ros_time(lidar_end_time);
-    trans.transform.translation.x = odomAftMapped.pose.pose.position.x;
-    trans.transform.translation.y = odomAftMapped.pose.pose.position.y;
-    trans.transform.translation.z = odomAftMapped.pose.pose.position.z;
-    trans.transform.rotation.w = odomAftMapped.pose.pose.orientation.w;
-    trans.transform.rotation.x = odomAftMapped.pose.pose.orientation.x;
-    trans.transform.rotation.y = odomAftMapped.pose.pose.orientation.y;
-    trans.transform.rotation.z = odomAftMapped.pose.pose.orientation.z;
+    trans.header.stamp = odomAftMapped.header.stamp;
+    trans.header.frame_id = "lidar_odom";
+    trans.child_frame_id = "base_link";
+
+    tf2::Transform tf_lidar_odom_to_lidar;
+    tf2::fromMsg(odomAftMapped.pose.pose, tf_lidar_odom_to_lidar);
+    tf2::Transform tf_lidar_to_base_link;
+    tf2::fromMsg(transform_lidar2base.transform, tf_lidar_to_base_link);
+    tf2::Transform tf_lidar_odom_to_base_link = tf_lidar_odom_to_lidar * tf_lidar_to_base_link;
+
+    trans.transform = tf2::toMsg(tf_lidar_odom_to_base_link);
     tf_br->sendTransform(trans);
 }
 
@@ -662,7 +691,7 @@ void publish_path(rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
 {
     set_posestamp(msg_body_pose);
     msg_body_pose.header.stamp = get_ros_time(lidar_end_time); // ros::Time().fromSec(lidar_end_time);
-    msg_body_pose.header.frame_id = "camera_init";
+    msg_body_pose.header.frame_id = "lidar_odom";
 
     /*** if path is too large, the rvis will crash ***/
     static int jjj = 0;
@@ -873,7 +902,7 @@ public:
         RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 
         path.header.stamp = this->get_clock()->now();
-        path.header.frame_id ="camera_init";
+        path.header.frame_id ="lidar_odom";
 
         // /*** variables definition ***/
         // int effect_feat_num = 0, frame_num = 0;
@@ -935,6 +964,11 @@ public:
         pubPath_ = this->create_publisher<nav_msgs::msg::Path>("/path", 20);
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
+        // ADD LINES BELOW
+        tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+        transform_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+        // ADD LINES ABOVE
+
         //------------------------------------------------------------------------------------------------------
         auto period_ms = std::chrono::milliseconds(static_cast<int64_t>(1000.0 / 100.0));
         timer_ = rclcpp::create_timer(this, this->get_clock(), period_ms, std::bind(&LaserMappingNode::timer_callback, this));
@@ -943,6 +977,23 @@ public:
         map_pub_timer_ = rclcpp::create_timer(this, this->get_clock(), map_period_ms, std::bind(&LaserMappingNode::map_publish_callback, this));
 
         map_save_srv_ = this->create_service<std_srvs::srv::Trigger>("map_save", std::bind(&LaserMappingNode::map_save_callback, this, std::placeholders::_1, std::placeholders::_2));
+
+        // ADD LINES BELOW
+        bool transform_available = false;
+        while (!transform_available)
+        {
+            try
+            {
+                transform_lidar2base = tf_buffer_->lookupTransform("base_lidar", "base_link", tf2::TimePointZero);
+                transform_available = true;
+                RCLCPP_INFO(this->get_logger(), "Transform available");
+            }
+            catch (tf2::TransformException &ex)
+            {
+                RCLCPP_WARN(this->get_logger(), "%s", ex.what());
+                rclcpp::sleep_for(std::chrono::milliseconds(100));
+            }
+        }
 
         RCLCPP_INFO(this->get_logger(), "Node init finished.");
     }
@@ -1140,6 +1191,11 @@ private:
     rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr sub_pcl_livox_;
 
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    // ADD LINES BELOW
+    std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> transform_listener_;
+    // ADD LINES ABOVE
+
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::TimerBase::SharedPtr map_pub_timer_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr map_save_srv_;
