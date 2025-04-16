@@ -105,6 +105,7 @@ ImuProcess::ImuProcess(rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pu
   Lidar_T_wrt_IMU = Zero3d;
   Lidar_R_wrt_IMU = Eye3d;
   last_imu_.reset(new sensor_msgs::msg::Imu());
+
 }
 
 ImuProcess::~ImuProcess() {}
@@ -237,7 +238,6 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
 
   /*** Initialize IMU pose ***/
   state_ikfom imu_state = kf_state.get_x();
-  PublishOdometry(imu_state, v_imu.back()->header.stamp);    // 发布里程计
   IMUpose.clear();
   IMUpose.push_back(set_pose6d(0.0, acc_s_last, angvel_last, imu_state.vel, imu_state.pos, imu_state.rot.toRotationMatrix()));
 
@@ -268,6 +268,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
     // fout_imu << setw(10) << head->header.stamp.toSec() - first_lidar_time << " " << angvel_avr.transpose() << " " << acc_avr.transpose() << endl;
 
     acc_avr     = acc_avr * G_m_s2 / mean_acc.norm(); // - state_inout.ba;
+
+    PublishOdometry(imu_state, v_imu.back()->header.stamp);    // 发布里程计
 
     if(head_stamp < last_lidar_end_time_)
     {

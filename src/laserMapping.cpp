@@ -957,7 +957,7 @@ public:
 
         Lidar_T_wrt_IMU<<VEC_FROM_ARRAY(extrinT);
         Lidar_R_wrt_IMU<<MAT_FROM_ARRAY(extrinR);
-        // p_imu = std::make_shared<ImuProcess>(pubOdomAftMapped_, tf_broadcaster_);
+        p_imu = std::make_shared<ImuProcess>(pubOdomAftMapped_, tf_broadcaster_);
         p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
         p_imu->set_gyr_cov(V3D(gyr_cov, gyr_cov, gyr_cov));
         p_imu->set_acc_cov(V3D(acc_cov, acc_cov, acc_cov));
