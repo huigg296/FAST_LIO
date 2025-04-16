@@ -269,7 +269,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
 
     acc_avr     = acc_avr * G_m_s2 / mean_acc.norm(); // - state_inout.ba;
 
-    PublishOdometry(imu_state, v_imu.back()->header.stamp);    // 发布里程计
+    PublishOdometry(imu_state, tail->header.stamp);    // 发布里程计
 
     if(head_stamp < last_lidar_end_time_)
     {
