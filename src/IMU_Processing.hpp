@@ -20,6 +20,11 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
 #include "use-ikfom.hpp"
+#include "tf2_ros/transform_broadcaster.h"
+#include "geometry_msgs/msg/transform_stamped.hpp"
+
+
+
 
 /// *************Preconfiguration
 
@@ -33,7 +38,7 @@ class ImuProcess
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-  ImuProcess();
+  ImuProcess(rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pub_odom, std::shared_ptr<tf2_ros::TransformBroadcaster> &tf_broadcaster);
   ~ImuProcess();
   
   void Reset();
@@ -61,6 +66,7 @@ class ImuProcess
  private:
   void IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N);
   void UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI &pcl_in_out);
+  void PublishOdometry(const state_ikfom &state_point, const rclcpp::Time &timestamp);
 
   PointCloudXYZI::Ptr cur_pcl_un_;
   // sensor_msgs::ImuConstPtr last_imu_;
@@ -79,10 +85,13 @@ class ImuProcess
   int    init_iter_num = 1;
   bool   b_first_frame_ = true;
   bool   imu_need_init_ = true;
+
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;//ros2格式的发布者
+  std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;//tf2广播
 };
 
-ImuProcess::ImuProcess()
-    : b_first_frame_(true), imu_need_init_(true), start_timestamp_(-1)
+ImuProcess::ImuProcess(rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pub_odom, std::shared_ptr<tf2_ros::TransformBroadcaster> &tf_broadcaster)
+    : b_first_frame_(true), imu_need_init_(true), start_timestamp_(-1), pub_odom_(pub_odom), tf_broadcaster_(tf_broadcaster)
 {
   init_iter_num = 1;
   Q = process_noise_cov();
@@ -100,7 +109,7 @@ ImuProcess::ImuProcess()
 
 ImuProcess::~ImuProcess() {}
 
-void ImuProcess::Reset() 
+void ImuProcess::Reset()
 {
   // ROS_WARN("Reset ImuProcess");
   mean_acc      = V3D(0, 0, -1.0);
@@ -157,9 +166,9 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
 {
   /** 1. initializing the gravity, gyro bias, acc and gyro covariance
    ** 2. normalize the acceleration measurenments to unit gravity **/
-  
+
   V3D cur_acc, cur_gyr;
-  
+
   if (b_first_frame_)
   {
     Reset();
@@ -191,7 +200,7 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
   }
   state_ikfom init_state = kf_state.get_x();
   init_state.grav = S2(- mean_acc / mean_acc.norm() * G_m_s2);
-  
+
   //state_inout.rot = Eye3d; // Exp(mean_acc.cross(V3D(0, 0, -1 / scale_gravity)));
   init_state.bg  = mean_gyr;
   init_state.offset_T_L_I = Lidar_T_wrt_IMU;
@@ -204,7 +213,7 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
   init_P(9,9) = init_P(10,10) = init_P(11,11) = 0.00001;
   init_P(15,15) = init_P(16,16) = init_P(17,17) = 0.0001;
   init_P(18,18) = init_P(19,19) = init_P(20,20) = 0.001;
-  init_P(21,21) = init_P(22,22) = 0.00001; 
+  init_P(21,21) = init_P(22,22) = 0.00001;
   kf_state.change_P(init_P);
   last_imu_ = meas.imu.back();
 
@@ -219,7 +228,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   const double &imu_end_time = rclcpp::Time(v_imu.back()->header.stamp).seconds();
   const double &pcl_beg_time = meas.lidar_beg_time;
   const double &pcl_end_time = meas.lidar_end_time;
-  
+
   /*** sort point clouds by offset time ***/
   pcl_out = *(meas.lidar);
   sort(pcl_out.points.begin(), pcl_out.points.end(), time_list);
@@ -228,6 +237,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
 
   /*** Initialize IMU pose ***/
   state_ikfom imu_state = kf_state.get_x();
+  PublishOdometry(imu_state, v_imu.back()->header.stamp);    // 发布里程计
   IMUpose.clear();
   IMUpose.push_back(set_pose6d(0.0, acc_s_last, angvel_last, imu_state.vel, imu_state.pos, imu_state.rot.toRotationMatrix()));
 
@@ -247,7 +257,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
     double head_stamp = rclcpp::Time(head->header.stamp).seconds();
 
     if (tail_stamp < last_lidar_end_time_)    continue;
-    
+
     angvel_avr<<0.5 * (head->angular_velocity.x + tail->angular_velocity.x),
                 0.5 * (head->angular_velocity.y + tail->angular_velocity.y),
                 0.5 * (head->angular_velocity.z + tail->angular_velocity.z);
@@ -268,7 +278,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
     {
       dt = tail_stamp - head_stamp;
     }
-    
+
     in.acc = acc_avr;
     in.gyro = angvel_avr;
     Q.block<3, 3>(0, 0).diagonal() = cov_gyr;
@@ -293,7 +303,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   double note = pcl_end_time > imu_end_time ? 1.0 : -1.0;
   dt = note * (pcl_end_time - imu_end_time);
   kf_state.predict(dt, Q, in);
-  
+
   imu_state = kf_state.get_x();
   last_imu_ = meas.imu.back();
   last_lidar_end_time_ = pcl_end_time;
@@ -321,11 +331,11 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
        * So if we want to compensate a point at timestamp-i to the frame-e
        * P_compensate = R_imu_e ^ T * (R_i * P_i + T_ei) where T_ei is represented in global frame */
       M3D R_i(R_imu * Exp(angvel_avr, dt));
-      
+
       V3D P_i(it_pcl->x, it_pcl->y, it_pcl->z);
       V3D T_ei(pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt - imu_state.pos);
       V3D P_compensate = imu_state.offset_R_L_I.conjugate() * (imu_state.rot.conjugate() * (R_i * (imu_state.offset_R_L_I * P_i + imu_state.offset_T_L_I) + T_ei) - imu_state.offset_T_L_I);// not accurate!
-      
+
       // save Undistorted points and their rotation
       it_pcl->x = P_compensate(0);
       it_pcl->y = P_compensate(1);
@@ -350,7 +360,7 @@ void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 
     IMU_init(meas, kf_state, init_iter_num);
 
     imu_need_init_ = true;
-    
+
     last_imu_   = meas.imu.back();
 
     state_ikfom imu_state = kf_state.get_x();
@@ -374,6 +384,44 @@ void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 
 
   t2 = omp_get_wtime();
   t3 = omp_get_wtime();
-  
+
   // cout<<"[ IMU Process ]: Time: "<<t3 - t1<<endl;
+}
+
+void ImuProcess::PublishOdometry(const state_ikfom &state_point, const rclcpp::Time &timestamp)
+{
+  nav_msgs::msg::Odometry odom;
+  odom.header.stamp = timestamp;
+  odom.header.frame_id = "camera_init";
+  odom.child_frame_id = "body";
+
+  odom.pose.pose.position.x = state_point.pos(0);
+  odom.pose.pose.position.y = state_point.pos(1);
+  odom.pose.pose.position.z = state_point.pos(2);
+
+  Eigen::Quaterniond q(state_point.rot.matrix());
+  odom.pose.pose.orientation.x = q.x();
+  odom.pose.pose.orientation.y = q.y();
+  odom.pose.pose.orientation.z = q.z();
+  odom.pose.pose.orientation.w = q.w();
+
+  // 创建 tf2 转换
+  geometry_msgs::msg::TransformStamped transform;
+  transform.header.stamp = timestamp;
+  transform.header.frame_id = "camera_init";
+  transform.child_frame_id = "body";
+
+  transform.transform.translation.x = odom.pose.pose.position.x;
+  transform.transform.translation.y = odom.pose.pose.position.y;
+  transform.transform.translation.z = odom.pose.pose.position.z;
+  transform.transform.rotation.x = odom.pose.pose.orientation.x;
+  transform.transform.rotation.y = odom.pose.pose.orientation.y;
+  transform.transform.rotation.z = odom.pose.pose.orientation.z;
+  transform.transform.rotation.w = odom.pose.pose.orientation.w;
+
+  // 发布消息
+  pub_odom_->publish(odom);
+
+  // 广播变换
+  tf_broadcaster_->sendTransform(transform);
 }
