@@ -1118,7 +1118,18 @@ private:
             /*** iterated state estimation ***/
             double t_update_start = omp_get_wtime();
             double solve_H_time = 0;
-            kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
+
+            /********************* EDIT BELOW ******************/
+            // 检查当前feats_down_body和ikdtree的点云数量
+            RCLCPP_DEBUG(this->get_logger(), "feats_down_body size: %ld, ikdtree size: %d", feats_down_body->points.size(), ikdtree.size());
+            if(ikdtree.size() > 2000) {
+                kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
+            }
+            else {
+                RCLCPP_WARN(this->get_logger(), "ikdtree size is too small, output odometry with IMU propagation");
+            }
+
+            /********************* EDIT ABOVE ******************/
             state_point = kf.get_x();
             euler_cur = SO3ToEuler(state_point.rot);
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
