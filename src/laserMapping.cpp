@@ -1122,7 +1122,7 @@ private:
             /********************* EDIT BELOW ******************/
             // 检查当前feats_down_body和ikdtree的点云数量
             RCLCPP_DEBUG(this->get_logger(), "feats_down_body size: %ld, ikdtree size: %d", feats_down_body->points.size(), ikdtree.size());
-            if(ikdtree.size() > 2000) {
+            if(ikdtree.size() > 3000) {
                 kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
             }
             else {
